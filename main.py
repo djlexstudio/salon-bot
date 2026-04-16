@@ -113,10 +113,10 @@ async def on_startup():
     # Автоматически добавляем тестовые данные, если их нет
     masters = await db.get_masters()
     if not masters:
-        await db.add_master("Анна", 5934756806, '["1","2","3"]') 
+        await db.add_master("Анна", 5934756806, '["1","2","3"]')  # замените на ваш chat_id
         await db.add_service("Стрижка женская", 45, 1500)
         await db.add_service("Окрашивание", 120, 3500)
-        await add_service("Укладка", 30, 800)
+        await db.add_service("Укладка", 30, 800)  # ✅ ИСПРАВЛЕНО: добавлен db.
         logger.info("✅ Тестовые данные добавлены")
     
     url = f"{settings.DOMAIN}{settings.WEBHOOK_PATH}"
