@@ -149,6 +149,42 @@ async def cmd_admin(message: types.Message):
     ])
     await message.answer("🔧 Панель администратора", reply_markup=kb)
 
+
+
+
+
+
+# === ВРЕМЕННЫЙ ЭНДПОИНТ ДЛЯ ИНИЦИАЛИЗАЦИИ ДАННЫХ ===
+@app.get("/init-data")
+async def init_test_data():
+    """Добавляет тестовых мастеров и услуги. Удалите после использования!"""
+    from database import add_master, add_service
+    
+    # Проверяем, есть ли уже данные
+    masters = await db.get_masters()
+    if masters:
+        return {"status": "error", "message": "Данные уже существуют"}
+    
+    # Добавляем тестового мастера (замените 123456789 на ваш chat_id!)
+    await add_master("Анна", 5934756806, '["1", "2", "3"]')
+    
+    # Добавляем услуги
+    await add_service("Стрижка женская", 45, 1500)
+    await add_service("Окрашивание", 120, 3500)
+    await add_service("Укладка", 30, 800)
+    await add_service("Маникюр", 60, 1200)
+    
+    return {
+        "status": "success",
+        "message": "✅ Данные добавлены! Теперь откройте бота и нажмите /start"
+    }
+
+
+
+
+
+
+
 # === ЗАПУСК ===
 @app.on_event("startup")
 async def on_startup():
