@@ -99,7 +99,6 @@ async def init_test_data():
     if await db.get_masters():
         return {"status": "info", "message": "Данные уже есть"}
     
-    # ⚠️ ЗАМЕНИТЕ 123456789 НА ВАШ РЕАЛЬНЫЙ CHAT_ID!
     await db.add_master("Анна", 5934756806, '["1","2","3"]')
     await db.add_service("Стрижка женская", 45, 1500)
     await db.add_service("Окрашивание", 120, 3500)
@@ -110,6 +109,16 @@ async def init_test_data():
 @app.on_event("startup")
 async def on_startup():
     await db.init_db()
+    
+    # Автоматически добавляем тестовые данные, если их нет
+    masters = await db.get_masters()
+    if not masters:
+        await db.add_master("Анна", 5934756806, '["1","2","3"]') 
+        await db.add_service("Стрижка женская", 45, 1500)
+        await db.add_service("Окрашивание", 120, 3500)
+        await add_service("Укладка", 30, 800)
+        logger.info("✅ Тестовые данные добавлены")
+    
     url = f"{settings.DOMAIN}{settings.WEBHOOK_PATH}"
     await bot.set_webhook(url, drop_pending_updates=True)
     logger.info(f"✅ Webhook: {url}")
