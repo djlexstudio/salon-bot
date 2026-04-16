@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://app.theseven.ru"],
+    allow_origins=["https://theseven.ru"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
