@@ -1,33 +1,22 @@
 import logging
 from datetime import datetime
 from fastapi import FastAPI, Request, HTTPException
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 from config import settings
 import database as db
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Инициализация
 app = FastAPI()
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
-# Состояния для FSM (если понадобится расширить логику бота)
-class BookingStates(StatesGroup):
-    selecting_service = State()
-    selecting_master = State()
-    selecting_time = State()
-
-# === TELEGRAM WEBHOOK ===
+# === WEBHOOK ===
 @app.post(settings.WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    """Обработчик вебхуков от Telegram"""
     try:
         data = await request.json()
         update = types.Update(**data)
@@ -37,168 +26,86 @@ async def telegram_webhook(request: Request):
         logger.error(f"Webhook error: {e}")
         raise HTTPException(status_code=500)
 
-# === MINI APP API ===
+# === API ДЛЯ MINI APP ===
 @app.get("/api/masters")
 async def api_get_masters():
-    """API: список мастеров для Mini App"""
-    masters = await db.get_masters()
-    return [{"id": m[0], "name": m[1]} for m in masters]
+    return [{"id": m[0], "name": m[1]} for m in await db.get_masters()]
 
 @app.get("/api/services")
 async def api_get_services():
-    """API: список услуг для Mini App"""
-    services = await db.get_services()
-    return [{"id": s[0], "name": s[1], "duration": s[2], "price": s[3]} for s in services]
+    return [{"id": s[0], "name": s[1], "duration": s[2], "price": s[3]} for s in await db.get_services()]
 
 @app.post("/api/check-slot")
 async def api_check_slot(request: Request):
-    """API: проверка занятости слота"""
     data = await request.json()
-    master_id = data.get("master_id")
-    appointment_time = data.get("time")  # ISO формат: "2024-01-15T14:00:00"
-    
-    is_free = await db.is_slot_free(master_id, appointment_time)
-    return {"available": is_free}
+    return {"available": await db.is_slot_free(data["master_id"], data["time"])}
 
 @app.post("/api/book")
 async def api_book_appointment(request: Request):
-    """API: создание записи"""
     data = await request.json()
-    
-    # Создаём запись в БД
-    appointment_id = await db.create_appointment(
-        user_id=data["user_id"],
-        user_name=data["user_name"],
-        master_id=data["master_id"],
-        service_id=data["service_id"],
+    aid = await db.create_appointment(
+        user_id=data["user_id"], user_name=data["user_name"],
+        master_id=data["master_id"], service_id=data["service_id"],
         appointment_time=data["appointment_time"]
     )
+    # Получаем детали: id, user_id, user_name, master_id, service_id, time, status, created_at, master_chat_id, master_name, service_name, price, duration
+    row = await db.get_appointment_details(aid)
+    if not row: return {"status": "error"}
     
-    # Получаем детали для уведомления
-    details = await db.get_appointment_details(appointment_id)
-    
-    # Формируем сообщение
-    service_name = details[7]  # service_name из JOIN
-    master_name = details[6]   # master_name
-    price = details[8]         # price
-    appt_time = datetime.fromisoformat(details[4]).strftime("%d.%m.%Y в %H:%M")
-    
-    message = (
-        f"✨ <b>Новая запись!</b>\n\n"
-        f"👤 Клиент: {details[2]}\n"
-        f"💇 Мастер: {master_name}\n"
-        f"✂️ Услуга: {service_name} ({details[9]} мин)\n"
-        f"💰 Стоимость: {price} ₽\n"
-        f"🕐 Время: {appt_time}\n\n"
-        f"ID записи: #{appointment_id}"
+    msg = (
+        f"✨ <b>Новая запись #{row[0]}!</b>\n\n"
+        f"👤 Клиент: {row[2]}\n"
+        f"💇 Мастер: {row[9]}\n"
+        f"✂️ Услуга: {row[10]} ({row[12]} мин)\n"
+        f"💰 Стоимость: {row[11]} ₽\n"
+        f"🕐 Время: {datetime.fromisoformat(row[5]).strftime('%d.%m.%Y в %H:%M')}"
     )
     
-    # Отправляем админу
-    try:
-        await bot.send_message(settings.ADMIN_CHAT_ID, message, parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Не удалось отправить уведомление админу: {e}")
+    # Уведомления
+    try: await bot.send_message(settings.ADMIN_CHAT_ID, msg, parse_mode="HTML")
+    except: pass
+    if row[8]: 
+        try: await bot.send_message(row[8], msg, parse_mode="HTML")
+        except: pass
+    try: await bot.send_message(data["user_id"], f"✅ <b>Вы записаны!</b>\n\n{msg}", parse_mode="HTML")
+    except: pass
     
-    # Отправляем мастеру (если указан chat_id)
-    master_chat_id = details[5]  # chat_id мастера из таблицы masters
-    if master_chat_id:
-        try:
-            await bot.send_message(master_chat_id, message, parse_mode="HTML")
-        except Exception as e:
-            logger.error(f"Не удалось отправить уведомление мастеру: {e}")
-    
-    # Отправляем подтверждение клиенту (если бот может ему написать)
-    try:
-        await bot.send_message(
-            data["user_id"],
-            f"✅ <b>Вы записаны!</b>\n\n{master_name}, {service_name}\n🕐 {appt_time}\n💰 {price} ₽",
-            parse_mode="HTML"
-        )
-    except Exception as e:
-        logger.warning(f"Не удалось отправить подтверждение клиенту: {e}")
-    
-    return {"status": "success", "appointment_id": appointment_id}
+    return {"status": "success", "appointment_id": aid}
 
-# === TELEGRAM BOT COMMANDS ===
+# === TELEGRAM HANDLERS ===
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    """Команда /start — главная кнопка для открытия Mini App"""
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="📅 Записаться онлайн",
-            web_app=WebAppInfo(url=settings.WEBAPP_URL)
-        )]
-    ])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📅 Записаться онлайн", web_app=WebAppInfo(url=settings.WEBAPP_URL))
+    ]])
     await message.answer(
         f"👋 Привет, {message.from_user.first_name}!\n\n"
         "Нажмите кнопку ниже, чтобы записаться в наш салон красоты.\n"
-        "Выберите мастера, услугу и удобное время — всё за 1 минуту ⚡",
+        "Выберите мастера, услугу и удобное время",
         reply_markup=kb
     )
 
-@dp.message(Command("admin"))
-async def cmd_admin(message: types.Message):
-    """Админ-команды (только для вашего chat_id)"""
-    if message.from_user.id != settings.ADMIN_CHAT_ID:
-        return
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Добавить мастера", callback_data="admin_add_master")],
-        [InlineKeyboardButton(text="➕ Добавить услугу", callback_data="admin_add_service")],
-        [InlineKeyboardButton(text="📋 Все записи", callback_data="admin_bookings")]
-    ])
-    await message.answer("🔧 Панель администратора", reply_markup=kb)
-
-
-
-
-
-
-# === ВРЕМЕННЫЙ ЭНДПОИНТ ДЛЯ ИНИЦИАЛИЗАЦИИ ДАННЫХ ===
+# === ВРЕМЕННЫЙ ЭНДПОИНТ (удалите после настройки) ===
 @app.get("/init-data")
 async def init_test_data():
-    """Добавляет тестовых мастеров и услуги. Удалите после использования!"""
-    from database import add_master, add_service
+    if await db.get_masters():
+        return {"status": "info", "message": "Данные уже есть"}
     
-    # Проверяем, есть ли уже данные
-    masters = await db.get_masters()
-    if masters:
-        return {"status": "error", "message": "Данные уже существуют"}
-    
-    # Добавляем тестового мастера (замените 123456789 на ваш chat_id!)
-    await add_master("Анна", 5934756806, '["1", "2", "3"]')
-    
-    # Добавляем услуги
-    await add_service("Стрижка женская", 45, 1500)
-    await add_service("Окрашивание", 120, 3500)
-    await add_service("Укладка", 30, 800)
-    await add_service("Маникюр", 60, 1200)
-    
-    return {
-        "status": "success",
-        "message": "✅ Данные добавлены! Теперь откройте бота и нажмите /start"
-    }
+    # ⚠️ ЗАМЕНИТЕ 123456789 НА ВАШ РЕАЛЬНЫЙ CHAT_ID!
+    await db.add_master("Анна", 5934756806, '["1","2","3"]')
+    await db.add_service("Стрижка женская", 45, 1500)
+    await db.add_service("Окрашивание", 120, 3500)
+    await db.add_service("Укладка", 30, 800)
+    return {"status": "success", "message": "✅ Тестовые данные добавлены"}
 
-
-
-
-
-
-
-# === ЗАПУСК ===
+# === STARTUP/SHUTDOWN ===
 @app.on_event("startup")
 async def on_startup():
-    """Инициализация БД и установка вебхука при старте"""
     await db.init_db()
-    
-    # Установка вебхука (только если домен уже с HTTPS)
-    webhook_url = f"{settings.DOMAIN}{settings.WEBHOOK_PATH}"
-    await bot.set_webhook(webhook_url, drop_pending_updates=True)
-    logger.info(f"✅ Webhook установлен: {webhook_url}")
+    url = f"{settings.DOMAIN}{settings.WEBHOOK_PATH}"
+    await bot.set_webhook(url, drop_pending_updates=True)
+    logger.info(f"✅ Webhook: {url}")
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    """Очистка вебхука при остановке"""
-    await bot.delete_webhook()
     await bot.session.close()
-    logger.info("🔌 Бот остановлен")
