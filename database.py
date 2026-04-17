@@ -97,9 +97,15 @@ async def create_appointment(user_id: int, user_name: str, master_id: int,
         return appointment_id  # Возвращаем ID
 
 async def get_appointment_details(appointment_id: int):
+    """Возвращает детали записи с именами мастера и услуги"""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute('''
-            SELECT a.*, m.name as master_name, s.name as service_name, s.price, s.duration
+            SELECT 
+                a.id, a.user_id, a.user_name, a.master_id, a.service_id,
+                a.appointment_time, a.status, a.created_at,
+                m.chat_id as master_chat_id,
+                m.name as master_name,
+                s.name as service_name, s.price, s.duration
             FROM appointments a
             JOIN masters m ON a.master_id = m.id
             JOIN services s ON a.service_id = s.id
