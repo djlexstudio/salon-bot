@@ -54,36 +54,100 @@ async def api_check_slot(request: Request):
 
 @app.post("/api/book")
 async def api_book_appointment(request: Request):
-    data = await request.json()
-    aid = await db.create_appointment(
-        user_id=data["user_id"], user_name=data["user_name"],
-        master_id=data["master_id"], service_id=data["service_id"],
-        appointment_time=data["appointment_time"]
-    )
-    # Получаем детали: id, user_id, user_name, master_id, service_id, time, status, created_at, master_chat_id, master_name, service_name, price, duration
-    row = await db.get_appointment_details(aid)
-    if not row: return {"status": "error"}
-    
-    msg = (
-        f"✨ <b>Новая запись #{row[0]}!</b>\n\n"
-        f"👤 Клиент: {row[2]}\n"
-        f"💇 Мастер: {row[9]}\n"
-        f"✂️ Услуга: {row[10]} ({row[12]} мин)\n"
-        f"💰 Стоимость: {row[11]} ₽\n"
-        f"🕐 Время: {datetime.fromisoformat(row[5]).strftime('%d.%m.%Y в %H:%M')}"
-    )
-    
-    # Уведомления
-    try: await bot.send_message(settings.ADMIN_CHAT_ID, msg, parse_mode="HTML")
-    except: pass
-    if row[8]: 
-        try: await bot.send_message(row[8], msg, parse_mode="HTML")
-        except: pass
-    try: await bot.send_message(data["user_id"], f"✅ <b>Вы записаны!</b>\n\n{msg}", parse_mode="HTML")
-    except: pass
-    
-    return {"status": "success", "appointment_id": aid}
-
+    try:
+        data = await request.json()
+        logger.info(f"📥 Получен запрос на запись: {data}")
+        
+        # Проверяем, существуют ли мастер и услуга
+        masters = await db.get_masters()
+        services = await db.get_services()
+        
+        master_exists = any(m[0] == data["master_id"] for m in masters)
+        service_exists = any(s[0] == data["service_id"] for s in services)
+        
+        if not master_exists:
+            logger.error(f"❌ Мастер с id={data['master_id']} не найден. Доступные: {masters}")
+            return {"status": "error", "message": f"Мастер не найден. Доступные ID: {[m[0] for m in masters]}"}
+        
+        if not service_exists:
+            logger.error(f"❌ Услуга с id={data['service_id']} не найден. Доступные: {services}")
+            return {"status": "error", "message": f"Услуга не найдена. Доступные ID: {[s[0] for s in services]}"}
+        
+        # Создаём запись
+        aid = await db.create_appointment(
+            user_id=data["user_id"],
+            user_name=data["user_name"],
+            master_id=data["master_id"],
+            service_id=data["service_id"],
+            appointment_time=data["appointment_time"]
+        )
+        logger.info(f"✅ Запись создана с id={aid}")
+        
+        # Получаем детали для уведомления (упрощённо)
+        async with aiosqlite.connect(db.DB_PATH) as conn:
+            async with conn.execute('''
+                SELECT m.name, s.name, s.price, s.duration 
+                FROM appointments a
+                JOIN masters m ON a.master_id = m.id
+                JOIN services s ON a.service_id = s.id
+                WHERE a.id = ?
+            ''', (aid,)) as cursor:
+                row = await cursor.fetchone()
+        
+        if not row:
+            logger.error(f"❌ Не удалось получить детали записи #{aid}")
+            return {"status": "error", "message": "Не удалось получить детали записи"}
+        
+        master_name, service_name, price, duration = row
+        appt_time = datetime.fromisoformat(data["appointment_time"]).strftime("%d.%m.%Y в %H:%M")
+        
+        # Формируем сообщение
+        msg = (
+            f"✨ <b>Новая запись #{aid}!</b>\n\n"
+            f"👤 Клиент: {data['user_name']}\n"
+            f"💇 Мастер: {master_name}\n"
+            f"✂️ Услуга: {service_name} ({duration} мин)\n"
+            f"💰 Стоимость: {price} ₽\n"
+            f"🕐 Время: {appt_time}"
+        )
+        
+        # Отправляем уведомления
+        try:
+            await bot.send_message(settings.ADMIN_CHAT_ID, msg, parse_mode="HTML")
+            logger.info("✅ Уведомление админу отправлено")
+        except Exception as e:
+            logger.error(f"⚠️ Не удалось отправить админу: {e}")
+        
+        # Мастеру (если указан chat_id)
+        async with aiosqlite.connect(db.DB_PATH) as conn:
+            async with conn.execute(
+                "SELECT chat_id FROM masters WHERE id = ?", 
+                (data["master_id"],)
+            ) as cursor:
+                master_row = await cursor.fetchone()
+        
+        if master_row and master_row[0]:
+            try:
+                await bot.send_message(master_row[0], msg, parse_mode="HTML")
+                logger.info("✅ Уведомление мастеру отправлено")
+            except Exception as e:
+                logger.error(f"⚠️ Не удалось отправить мастеру: {e}")
+        
+        # Клиенту
+        try:
+            await bot.send_message(
+                data["user_id"],
+                f"✅ <b>Вы записаны!</b>\n\n{master_name}, {service_name}\n🕐 {appt_time}\n💰 {price} ₽",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось отправить клиенту: {e}")
+        
+        return {"status": "success", "appointment_id": aid}
+        
+    except Exception as e:
+        logger.error(f"💥 Критическая ошибка в /api/book: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 # === TELEGRAM HANDLERS ===
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
