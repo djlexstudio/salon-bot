@@ -82,16 +82,19 @@ async def is_slot_free(master_id: int, appointment_time: str) -> bool:
             return await cursor.fetchone() is None
 
 async def create_appointment(user_id: int, user_name: str, master_id: int, 
-                            service_id: int, appointment_time: str):
+                            service_id: int, appointment_time: str) -> int:
+    """Создаёт запись и возвращает её ID"""
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
+        cursor = await db.execute(
             """INSERT INTO appointments 
                (user_id, user_name, master_id, service_id, appointment_time, created_at) 
                VALUES (?, ?, ?, ?, ?, ?)""",
             (user_id, user_name, master_id, service_id, appointment_time, 
              datetime.now().isoformat())
         )
+        appointment_id = cursor.lastrowid  # Получаем ID новой записи
         await db.commit()
+        return appointment_id  # Возвращаем ID
 
 async def get_appointment_details(appointment_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
