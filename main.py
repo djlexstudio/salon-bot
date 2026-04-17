@@ -58,7 +58,7 @@ async def api_book_appointment(request: Request):
         data = await request.json()
         logger.info(f"📥 Запрос на запись: {data}")
         
-        # Создаём запись (теперь функция вернёт ID)
+        # Создаём запись
         aid = await db.create_appointment(
             user_id=data["user_id"],
             user_name=data["user_name"],
@@ -68,13 +68,12 @@ async def api_book_appointment(request: Request):
         )
         logger.info(f"✅ Запись создана, id={aid}")
         
-        # Получаем детали через существующую функцию
+        # Получаем детали
         details = await db.get_appointment_details(aid)
         if not details:
             return {"status": "error", "message": "Не удалось получить детали записи"}
         
-        # Распаковываем данные (порядок колонок из SQL JOIN в database.py)
-        # [id, user_id, user_name, master_id, service_id, time, status, created_at, master_chat_id, master_name, service_name, price, duration]
+        # Распаковываем данные
         master_name = details[9]
         service_name = details[10]
         price = details[11]
@@ -101,7 +100,7 @@ async def api_book_appointment(request: Request):
         master_chat_id = details[8]
         if master_chat_id:
             try:
-                await bot.send_message(master_chat_id, msg, parse_mode=" "HTML")
+                await bot.send_message(master_chat_id, msg, parse_mode="HTML")  # ✅ ИСПРАВЛЕНО
             except Exception as e:
                 logger.warning(f"⚠️ Мастеру не отправлено: {e}")
         
