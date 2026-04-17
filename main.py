@@ -58,10 +58,17 @@ async def api_book_appointment(request: Request):
         data = await request.json()
         logger.info(f"📥 Запрос на запись: {data}")
         
+        # 🔐 Проверяем обязательные поля
+        required = ["user_id", "user_name", "master_id", "service_id", "appointment_time"]
+        for field in required:
+            if field not in data:
+                logger.error(f"❌ Отсутствует поле: {field}")
+                return {"status": "error", "message": f"Отсутствует поле: {field}"}
+        
         # Создаём запись
         aid = await db.create_appointment(
             user_id=data["user_id"],
-            user_name=data["user_name"],
+            user_name=data["user_name"] or "Аноним",
             master_id=data["master_id"],
             service_id=data["service_id"],
             appointment_time=data["appointment_time"]
@@ -83,7 +90,7 @@ async def api_book_appointment(request: Request):
         # Формируем сообщение
         msg = (
             f"✨ <b>Новая запись #{aid}!</b>\n\n"
-            f"👤 Клиент: {data['user_name']}\n"
+            f"👤 Клиент: {data['user_name'] or 'Аноним'}\n"
             f"💇 Мастер: {master_name}\n"
             f"✂️ Услуга: {service_name} ({duration} мин)\n"
             f"💰 Стоимость: {price} ₽\n"
@@ -93,18 +100,20 @@ async def api_book_appointment(request: Request):
         # Уведомление админу
         try:
             await bot.send_message(settings.ADMIN_CHAT_ID, msg, parse_mode="HTML")
+            logger.info("✅ Админу отправлено")
         except Exception as e:
             logger.warning(f"⚠️ Админу не отправлено: {e}")
         
-        # Уведомление мастеру (если есть chat_id)
+        # Уведомление мастеру
         master_chat_id = details[8]
         if master_chat_id:
             try:
-                await bot.send_message(master_chat_id, msg, parse_mode="HTML")  # ✅ ИСПРАВЛЕНО
+                await bot.send_message(master_chat_id, msg, parse_mode="HTML")
+                logger.info("✅ Мастеру отправлено")
             except Exception as e:
                 logger.warning(f"⚠️ Мастеру не отправлено: {e}")
         
-        # Подтверждение клиенту
+        # Клиенту (если user_id — это chat_id Telegram)
         try:
             await bot.send_message(
                 data["user_id"],
@@ -116,6 +125,9 @@ async def api_book_appointment(request: Request):
         
         return {"status": "success", "appointment_id": aid}
         
+    except KeyError as e:
+        logger.error(f"❌ KeyError: {e}")
+        return {"status": "error", "message": f"Отсутствует обязательное поле: {e}"}
     except Exception as e:
         logger.error(f"💥 Ошибка в /api/book: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
