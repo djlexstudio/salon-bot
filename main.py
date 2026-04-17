@@ -56,24 +56,9 @@ async def api_check_slot(request: Request):
 async def api_book_appointment(request: Request):
     try:
         data = await request.json()
-        logger.info(f"📥 Получен запрос на запись: {data}")
+        logger.info(f"📥 Запрос на запись: {data}")
         
-        # Проверяем, существуют ли мастер и услуга
-        masters = await db.get_masters()
-        services = await db.get_services()
-        
-        master_exists = any(m[0] == data["master_id"] for m in masters)
-        service_exists = any(s[0] == data["service_id"] for s in services)
-        
-        if not master_exists:
-            logger.error(f"❌ Мастер с id={data['master_id']} не найден. Доступные: {masters}")
-            return {"status": "error", "message": f"Мастер не найден. Доступные ID: {[m[0] for m in masters]}"}
-        
-        if not service_exists:
-            logger.error(f"❌ Услуга с id={data['service_id']} не найден. Доступные: {services}")
-            return {"status": "error", "message": f"Услуга не найдена. Доступные ID: {[s[0] for s in services]}"}
-        
-        # Создаём запись
+        # Создаём запись (теперь функция вернёт ID)
         aid = await db.create_appointment(
             user_id=data["user_id"],
             user_name=data["user_name"],
@@ -81,25 +66,20 @@ async def api_book_appointment(request: Request):
             service_id=data["service_id"],
             appointment_time=data["appointment_time"]
         )
-        logger.info(f"✅ Запись создана с id={aid}")
+        logger.info(f"✅ Запись создана, id={aid}")
         
-        # Получаем детали для уведомления (упрощённо)
-        async with aiosqlite.connect(db.DB_PATH) as conn:
-            async with conn.execute('''
-                SELECT m.name, s.name, s.price, s.duration 
-                FROM appointments a
-                JOIN masters m ON a.master_id = m.id
-                JOIN services s ON a.service_id = s.id
-                WHERE a.id = ?
-            ''', (aid,)) as cursor:
-                row = await cursor.fetchone()
-        
-        if not row:
-            logger.error(f"❌ Не удалось получить детали записи #{aid}")
+        # Получаем детали через существующую функцию
+        details = await db.get_appointment_details(aid)
+        if not details:
             return {"status": "error", "message": "Не удалось получить детали записи"}
         
-        master_name, service_name, price, duration = row
-        appt_time = datetime.fromisoformat(data["appointment_time"]).strftime("%d.%m.%Y в %H:%M")
+        # Распаковываем данные (порядок колонок из SQL JOIN в database.py)
+        # [id, user_id, user_name, master_id, service_id, time, status, created_at, master_chat_id, master_name, service_name, price, duration]
+        master_name = details[9]
+        service_name = details[10]
+        price = details[11]
+        duration = details[12]
+        appt_time = datetime.fromisoformat(details[5]).strftime("%d.%m.%Y в %H:%M")
         
         # Формируем сообщение
         msg = (
@@ -111,29 +91,21 @@ async def api_book_appointment(request: Request):
             f"🕐 Время: {appt_time}"
         )
         
-        # Отправляем уведомления
+        # Уведомление админу
         try:
             await bot.send_message(settings.ADMIN_CHAT_ID, msg, parse_mode="HTML")
-            logger.info("✅ Уведомление админу отправлено")
         except Exception as e:
-            logger.error(f"⚠️ Не удалось отправить админу: {e}")
+            logger.warning(f"⚠️ Админу не отправлено: {e}")
         
-        # Мастеру (если указан chat_id)
-        async with aiosqlite.connect(db.DB_PATH) as conn:
-            async with conn.execute(
-                "SELECT chat_id FROM masters WHERE id = ?", 
-                (data["master_id"],)
-            ) as cursor:
-                master_row = await cursor.fetchone()
-        
-        if master_row and master_row[0]:
+        # Уведомление мастеру (если есть chat_id)
+        master_chat_id = details[8]
+        if master_chat_id:
             try:
-                await bot.send_message(master_row[0], msg, parse_mode="HTML")
-                logger.info("✅ Уведомление мастеру отправлено")
+                await bot.send_message(master_chat_id, msg, parse_mode=" "HTML")
             except Exception as e:
-                logger.error(f"⚠️ Не удалось отправить мастеру: {e}")
+                logger.warning(f"⚠️ Мастеру не отправлено: {e}")
         
-        # Клиенту
+        # Подтверждение клиенту
         try:
             await bot.send_message(
                 data["user_id"],
@@ -141,12 +113,12 @@ async def api_book_appointment(request: Request):
                 parse_mode="HTML"
             )
         except Exception as e:
-            logger.warning(f"⚠️ Не удалось отправить клиенту: {e}")
+            logger.warning(f"⚠️ Клиенту не отправлено: {e}")
         
         return {"status": "success", "appointment_id": aid}
         
     except Exception as e:
-        logger.error(f"💥 Критическая ошибка в /api/book: {e}", exc_info=True)
+        logger.error(f"💥 Ошибка в /api/book: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 # === TELEGRAM HANDLERS ===
 @dp.message(Command("start"))
