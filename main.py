@@ -75,16 +75,17 @@ async def api_book_appointment(request: Request):
         )
         logger.info(f"✅ Запись создана, id={aid}")
         
-        # Получаем детали
+                # Получаем детали
         details = await db.get_appointment_details(aid)
         if not details:
             return {"status": "error", "message": "Не удалось получить детали записи"}
         
-        # Распаковываем данные
-        master_name = details[9]
-        service_name = details[10]
-        price = details[11]
-        duration = details[12]
+        # ✅ Правильные индексы (см. запрос выше)
+        master_chat_id = details[8]    # chat_id мастера
+        master_name = details[9]       # имя мастера
+        service_name = details[10]     # имя услуги
+        price = details[11]            # цена
+        duration = details[12]         # длительность
         appt_time = datetime.fromisoformat(details[5]).strftime("%d.%m.%Y в %H:%M")
         
         # Формируем сообщение
